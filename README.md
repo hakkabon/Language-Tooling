@@ -1,0 +1,47 @@
+# Language Tooling
+
+Transport-neutral editor and tooling foundations shared by language kits.
+
+The package owns UTF-16 coordinate mapping, portable completion/navigation/
+semantic-index values, deterministic semantic-token encoding, formatting
+mechanics, and reusable conformance validation. It does not own a grammar,
+parser, AST, name-binding policy, type system, compiler, editor, or LSP
+transport.
+
+Dependency direction is one way:
+
+```text
+language kits and hosts
+          |
+          v
+  Language-Tooling
+          |
+          v
+ Incremental-Parsing
+```
+
+PL/0 and Pascal supply language policy through projections into these values.
+
+## Products
+
+- `LanguageTooling` defines provider sessions, UTF-16 source mapping, editor
+  values, semantic graphs and navigation queries, and semantic-token encoding.
+- `LanguageToolingFormatting` provides deterministic indentation and whitespace
+  mechanics. A language kit still decides where indentation and line breaks
+  belong.
+- `LanguageToolingTesting` validates semantic graphs and semantic-token streams
+  without importing a particular language kit.
+
+## Ownership boundary
+
+Language kits own grammar artifacts, lexical and syntactic projections,
+binding and type rules, formatter policy, and compiler semantics. Hosts own
+transport, UI, document lifetime, and visualization. Shared tooling contains
+only mechanisms that are meaningful for more than one language and does not
+depend on PL/0, Pascal, ModEdit, or a parser implementation.
+
+PL/0 is the first semantic/navigation adopter: it projects its native scopes,
+symbols, and references into `ToolingSemanticIndex`. Pascal is the independent
+lightweight adopter: its provider exposes grammar-derived keyword completion
+and encoded lexical semantic tokens through `LanguageToolingSession` without
+adding a semantic model prematurely.
