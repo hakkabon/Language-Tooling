@@ -25,7 +25,8 @@ PL/0 and Pascal supply language policy through projections into these values.
 ## Products
 
 - `LanguageTooling` defines provider sessions, UTF-16 source mapping, editor
-  values, semantic graphs and navigation queries, and semantic-token encoding.
+  values, semantic graphs and navigation queries, semantic-token encoding, and
+  `LanguageToolingDocument`, a revision-validating consumer lifecycle actor.
 - `LanguageToolingFormatting` provides deterministic indentation and whitespace
   mechanics. A language kit still decides where indentation and line breaks
   belong.
@@ -45,3 +46,8 @@ symbols, and references into `ToolingSemanticIndex`. Pascal is the independent
 lightweight adopter: its provider exposes grammar-derived keyword completion
 and encoded lexical semantic tokens through `LanguageToolingSession` without
 adding a semantic model prematurely.
+
+ModEdit, Grammar-REPL, and Grammar-Workbench now build their consumer adapters
+on `LanguageToolingDocument`. The actor owns a provider session and the current
+snapshot; it deliberately does not own provider selection, transport, UI, or
+document persistence.

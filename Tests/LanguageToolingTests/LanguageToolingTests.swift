@@ -67,3 +67,49 @@ import Testing
     writer.append("end.")
     #expect(writer.finish() == "begin\n  call p;\nend.\n")
 }
+
+@Test func documentHostOwnsConsumerLifecycleAndValidatedEdits() async throws {
+    let document = LanguageToolingDocument(provider: TestToolingProvider())
+    let original = SourceSnapshot(text: "alpha", revision: .init(1))
+    let opened = try await document.open(original)
+    let edit = SourceEdit(
+        baseRevision: original.revision,
+        range: .init(location: 5, length: 0),
+        replacement: " beta")
+    let changed = try await document.apply(edit)
+
+    #expect(document.descriptor.id == "test")
+    #expect(opened.revision == original.revision)
+    #expect(changed.revision == .init(2))
+    #expect(await document.snapshot?.text == "alpha beta")
+    #expect(try await document.completions(
+        at: .init(line: 0, character: 0)).first?.label == "alpha")
+    await #expect(throws: SourceEditError.self) {
+        try await document.update(try #require(await document.snapshot))
+    }
+}
+
+private struct TestToolingProvider: LanguageToolingProvider {
+    let descriptor = LanguageProviderDescriptor(
+        id: "test", displayName: "Test", fileExtensions: ["test"],
+        distribution: .hostDefined, capabilities: [.incrementalAnalysis])
+
+    func makeToolingSession() -> any LanguageToolingSession {
+        TestToolingSession()
+    }
+}
+
+private actor TestToolingSession: LanguageToolingSession {
+    func analyze(_ snapshot: SourceSnapshot, change: SourceChange?) async throws
+        -> LanguageProviderAnalysis {
+        if let change, change.after != snapshot {
+            throw LanguageProviderError.inconsistentChange
+        }
+        return .init(languageID: "test", revision: snapshot.revision)
+    }
+
+    func completions(at position: ToolingPosition) async throws
+        -> [ToolingCompletionItem] {
+        [.init(label: "alpha", kind: .variable, detail: "test", insertText: "alpha")]
+    }
+}
