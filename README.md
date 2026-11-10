@@ -32,6 +32,10 @@ PL/0 and Pascal supply language policy through projections into these values.
   belong.
 - `LanguageToolingTesting` validates semantic graphs and semantic-token streams
   without importing a particular language kit.
+- `LanguageExperimentProtocol` owns transport-neutral experiment bundles,
+  artifact identities, recovery/reuse evidence, and deterministic fingerprints.
+  It was extracted from PL0-LanguageKit in Phase 32 and has no language or
+  parser dependency.
 
 ## Ownership boundary
 

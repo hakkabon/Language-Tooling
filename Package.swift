@@ -12,6 +12,9 @@ let package = Package(
         .library(
             name: "LanguageToolingTesting",
             targets: ["LanguageToolingTesting"]),
+        .library(
+            name: "LanguageExperimentProtocol",
+            targets: ["LanguageExperimentProtocol"]),
     ],
     dependencies: [
         .package(path: "../Incremental-Parsing"),
@@ -30,6 +33,7 @@ let package = Package(
         .target(
             name: "LanguageToolingTesting",
             dependencies: ["LanguageTooling"]),
+        .target(name: "LanguageExperimentProtocol"),
         .testTarget(
             name: "LanguageToolingTests",
             dependencies: [
@@ -40,4 +44,7 @@ let package = Package(
                     name: "IncrementalParsing",
                     package: "Incremental-Parsing"),
             ]),
+        .testTarget(
+            name: "LanguageExperimentProtocolTests",
+            dependencies: ["LanguageExperimentProtocol"]),
     ])
