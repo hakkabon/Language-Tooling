@@ -25,6 +25,11 @@ struct EmbeddedLanguageProviderTests {
                 && $0.modifiers.contains("embedded.css")
         })
         #expect(initial.diagnostics.first?.range == .init(location: 7, length: 1))
+        #expect(initial.diagnostics.first?.id == "embedded.css.0.css.sample")
+        #expect(initial.recoveryEdits.first?.action == .delete(
+            terminal: "bad", range: .init(location: 7, length: 1)))
+        #expect(initial.recoveryEdits.first?.diagnosticID
+            == "embedded.css.0.css.sample")
 
         let change = try SourceEdit(
             baseRevision: first.revision,
@@ -60,7 +65,9 @@ private struct MockProvider: LanguageToolingProvider {
         descriptor = .init(
             id: id, displayName: id, fileExtensions: [],
             distribution: .hostDefined,
-            capabilities: [.syntaxHighlighting, .incrementalAnalysis, .diagnostics])
+            capabilities: [
+                .syntaxHighlighting, .incrementalAnalysis, .diagnostics, .recovery,
+            ])
         self.classification = classification
     }
 
@@ -87,8 +94,12 @@ private actor MockSession: LanguageToolingSession {
                 range: .init(location: 0, length: length),
                 classification: classification)],
             diagnostics: id == "css" && length > 0 ? [.init(
-                severity: .error, message: "sample",
+                id: "css.sample", severity: .error, message: "sample",
                 range: .init(location: 0, length: 1))] : [],
+            recoveryEdits: id == "css" && length > 0 ? [.init(
+                action: .delete(
+                    terminal: "bad", range: .init(location: 0, length: 1)),
+                diagnosticID: "css.sample")] : [],
             operations: [.init(operation: "analysis", evidence: .init(
                 strategy: change == nil ? .full : .incremental,
                 measurements: [.init(

@@ -85,6 +85,7 @@ private actor EmbeddedLanguageSession: LanguageToolingSession {
         var nextChildren: [String: ChildState] = [:]
         var embeddedTokens: [LanguageProviderToken] = []
         var embeddedDiagnostics: [LanguageProviderDiagnostic] = []
+        var embeddedRecoveryEdits: [LanguageProviderRecoveryEdit] = []
         var embeddedOperations: [LanguageProviderOperationEvidence] = []
         var reusedRegions = 0
 
@@ -119,12 +120,19 @@ private actor EmbeddedLanguageSession: LanguageToolingSession {
                         "embedded.\(region.languageID)",
                     ]))
             }
+            let namespace = "embedded.\(region.id)"
             embeddedDiagnostics += analysis.diagnostics.map {
-                .init(
-                    severity: $0.severity,
-                    message: "[\(region.languageID)] \($0.message)",
-                    range: relocated($0.range, by: region.range.location),
-                    expected: $0.expected)
+                let moved = $0.relocated(
+                    by: region.range.location, idPrefix: namespace)
+                return .init(
+                    id: moved.id, severity: moved.severity,
+                    message: "[\(region.languageID)] \(moved.message)",
+                    range: moved.range, expected: moved.expected)
+            }
+            embeddedRecoveryEdits += analysis.recoveryEdits.map {
+                $0.relocated(
+                    by: region.range.location,
+                    diagnosticIDPrefix: namespace)
             }
             embeddedOperations += analysis.operations.map {
                 .init(
@@ -155,7 +163,7 @@ private actor EmbeddedLanguageSession: LanguageToolingSession {
                     < ($1.range.location, $1.range.length)
             },
             diagnostics: hostAnalysis.diagnostics + embeddedDiagnostics,
-            recoveryEdits: hostAnalysis.recoveryEdits,
+            recoveryEdits: hostAnalysis.recoveryEdits + embeddedRecoveryEdits,
             embeddedRegions: regions,
             operations: hostAnalysis.operations + embeddedOperations + [
                 .init(operation: "embedding", evidence: embeddingEvidence),
