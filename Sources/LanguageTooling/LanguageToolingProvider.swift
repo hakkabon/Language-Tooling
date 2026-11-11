@@ -2,10 +2,17 @@ import IncrementalParsing
 
 public protocol LanguageToolingProvider: LanguageProvider {
     func makeToolingSession() -> any LanguageToolingSession
+    func makeToolingSession(documentURI: String) -> any LanguageToolingSession
 }
 
 public extension LanguageToolingProvider {
     func makeSession() -> any LanguageProviderSession { makeToolingSession() }
+
+    /// Document-aware factory used by project hosts. Existing providers remain
+    /// source compatible; providers that emit locations should override it.
+    func makeToolingSession(documentURI: String) -> any LanguageToolingSession {
+        makeToolingSession()
+    }
 }
 
 public protocol LanguageToolingSession: LanguageProviderSession {

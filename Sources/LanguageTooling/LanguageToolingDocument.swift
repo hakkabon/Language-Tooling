@@ -11,9 +11,13 @@ public actor LanguageToolingDocument {
     public private(set) var snapshot: SourceSnapshot?
     public private(set) var analysis: LanguageProviderAnalysis?
 
-    public init(provider: any LanguageToolingProvider) {
+    public init(
+        provider: any LanguageToolingProvider,
+        documentURI: String? = nil
+    ) {
         descriptor = provider.descriptor
-        session = provider.makeToolingSession()
+        session = documentURI.map(provider.makeToolingSession(documentURI:))
+            ?? provider.makeToolingSession()
     }
 
     @discardableResult

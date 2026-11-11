@@ -55,3 +55,15 @@ ModEdit, Grammar-REPL, and Grammar-Workbench now build their consumer adapters
 on `LanguageToolingDocument`. The actor owns a provider session and the current
 snapshot; it deliberately does not own provider selection, transport, UI, or
 document persistence.
+
+## Project-scale services
+
+`LanguageToolingProject` extends that lifecycle to a revisioned collection of
+URI-addressed documents. It aggregates diagnostics, reports rebuilt, reused,
+and removed documents, and offers one definition, references, and workspace
+rename surface to editors, REPLs, workbenches, and language-server transports.
+
+Cross-file policy remains language-owned. A `LanguageToolingProjectResolver`
+receives deterministic project snapshots and implements imports, visibility,
+overload selection, and project symbol identity. Providers may override the
+URI-aware session factory so every location refers to the actual document.
