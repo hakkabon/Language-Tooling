@@ -19,6 +19,8 @@ struct LanguageToolingProjectTests {
         ])
         #expect(first.evidence.strategy == .full)
         #expect(first.rebuiltDocuments == [library, client])
+        #expect(try await project.completions(
+            in: client, at: .init(line: 0, character: 2)).map(\.label) == ["answer"])
         #expect(try await project.definition(
             in: client, at: .init(line: 0, character: 2))?.uri
             == library.rawValue)
@@ -72,7 +74,33 @@ struct LanguageToolingProjectTests {
             ])
         }
     }
+
+    @Test func resolverRejectionAllowsRetryOfExactProjectRevision() async throws {
+        let resolver = TestProjectResolver()
+        let project = LanguageToolingProject(
+            providers: [ProjectTestProvider()], resolver: resolver)
+        let uri = ToolingDocumentURI("file:///client.test")
+        let original = SourceSnapshot(text: "answer", revision: .init(1))
+        try await project.update(revision: 1, documents: [(uri, "project-test", original)])
+        let change = try SourceEdit(
+            baseRevision: original.revision,
+            range: .init(location: 0, length: 6), replacement: "result")
+            .applying(to: original)
+        let updates = [ToolingProjectDocumentUpdate(
+            uri: uri, languageID: "project-test", snapshot: change.after, change: change)]
+        await resolver.rejectNextUpdate()
+        await #expect(throws: ResolverRejection.self) {
+            try await project.update(revision: 2, documents: updates)
+        }
+        #expect(await project.revision == 1)
+        #expect(try await project.diagnostics()[uri]?.count == 1)
+        let accepted = try await project.update(revision: 2, documents: updates)
+        #expect(accepted.rebuiltDocuments == [uri])
+        #expect(try await project.diagnostics()[uri]?.isEmpty == true)
+    }
 }
+
+private struct ResolverRejection: Error {}
 
 private struct ProjectTestProvider: LanguageToolingProvider {
     let descriptor = LanguageProviderDescriptor(
@@ -110,9 +138,31 @@ private actor ProjectTestSession: LanguageToolingSession {
 
 private actor TestProjectResolver: LanguageToolingProjectResolver {
     private(set) var revisions: [UInt64] = []
+    private var reject = false
+
+    func rejectNextUpdate() { reject = true }
 
     func update(_ snapshot: ToolingProjectSnapshot) async throws {
+        if reject {
+            reject = false
+            throw ResolverRejection()
+        }
         revisions.append(snapshot.revision)
+    }
+
+    func completions(
+        in snapshot: ToolingProjectSnapshot,
+        document: ToolingDocumentURI,
+        at position: ToolingPosition
+    ) async throws -> [ToolingCompletionItem]? {
+        snapshot.documents.compactMap { file in
+            guard file.uri != document, file.snapshot.text.hasPrefix("let ") else {
+                return nil
+            }
+            let name = String(file.snapshot.text.dropFirst(4))
+            return .init(label: name, kind: .variable,
+                         detail: "Project declaration", insertText: name)
+        }
     }
 
     func definition(

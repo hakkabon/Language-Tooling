@@ -83,6 +83,7 @@ public struct ToolingProjectUpdateResult: Sendable {
 }
 
 public enum LanguageToolingProjectError: Error, Hashable, Sendable {
+    case operationInProgress
     case staleRevision(previous: UInt64, proposed: UInt64)
     case duplicateDocument(ToolingDocumentURI)
     case unknownLanguage(String)
@@ -94,7 +95,15 @@ public enum LanguageToolingProjectError: Error, Hashable, Sendable {
 /// Language-owned cross-file policy. The workspace owns document lifecycle;
 /// resolvers own imports, visibility, overload rules, and project symbol IDs.
 public protocol LanguageToolingProjectResolver: Sendable {
+    /// Publish resolver state only when this operation succeeds. A thrown
+    /// error leaves the previously committed revision available for queries.
     func update(_ snapshot: ToolingProjectSnapshot) async throws
+    /// Return nil to delegate completion to the document provider.
+    func completions(
+        in snapshot: ToolingProjectSnapshot,
+        document: ToolingDocumentURI,
+        at position: ToolingPosition
+    ) async throws -> [ToolingCompletionItem]?
     func definition(
         in snapshot: ToolingProjectSnapshot,
         document: ToolingDocumentURI,
@@ -114,6 +123,12 @@ public protocol LanguageToolingProjectResolver: Sendable {
 }
 
 public extension LanguageToolingProjectResolver {
+    func completions(
+        in snapshot: ToolingProjectSnapshot,
+        document: ToolingDocumentURI,
+        at position: ToolingPosition
+    ) async throws -> [ToolingCompletionItem]? { nil }
+
     func definition(
         in snapshot: ToolingProjectSnapshot,
         document: ToolingDocumentURI,
@@ -148,6 +163,7 @@ public actor LanguageToolingProject {
     private let resolver: (any LanguageToolingProjectResolver)?
     private var entries: [ToolingDocumentURI: Entry] = [:]
     private var currentSnapshot: ToolingProjectSnapshot?
+    private var operationInProgress = false
 
     public init(
         providers: [any LanguageToolingProvider],
@@ -183,6 +199,8 @@ public actor LanguageToolingProject {
         revision proposedRevision: UInt64,
         documents proposed: [ToolingProjectDocumentUpdate]
     ) async throws -> ToolingProjectUpdateResult {
+        try beginOperation()
+        defer { operationInProgress = false }
         let isInitial = currentSnapshot == nil
         if let previous = currentSnapshot?.revision, proposedRevision <= previous {
             throw LanguageToolingProjectError.staleRevision(
@@ -211,31 +229,40 @@ public actor LanguageToolingProject {
         var nextEntries: [ToolingDocumentURI: Entry] = [:]
         var output: [ToolingProjectDocument] = []
 
+        let committed = Dictionary(uniqueKeysWithValues:
+            (currentSnapshot?.documents ?? []).map { ($0.uri, $0) })
         for uri in inputs.keys.sorted() {
             let (languageID, source, change) = inputs[uri]!
             let entry: Entry
             let analysis: LanguageProviderAnalysis
-            if let existing = entries[uri],
-               let oldSource = await existing.document.snapshot,
-               oldSource == source {
-                guard let oldAnalysis = await existing.document.analysis else {
-                    throw LanguageToolingError.documentNotAnalyzed
+            let old = committed[uri]
+            if let change {
+                guard let old, old.snapshot == change.before,
+                      change.after == source else {
+                    throw LanguageProviderError.inconsistentChange
                 }
+            }
+            if let existing = entries[uri], let old, old.snapshot == source {
                 entry = existing
-                analysis = oldAnalysis
+                analysis = old.analysis
                 reused.insert(uri)
-            } else if let existing = entries[uri] {
-                entry = existing
-                analysis = try await existing.document.update(
-                    source, change: change)
-                rebuilt.insert(uri)
             } else {
-                if change != nil { throw LanguageProviderError.inconsistentChange }
+                if let old, source.revision <= old.snapshot.revision {
+                    throw SourceEditError.nonIncreasingRevision(
+                        base: old.snapshot.revision, proposed: source.revision)
+                }
                 let provider = providers[languageID]!
                 let document = LanguageToolingDocument(
                     provider: provider, documentURI: uri.rawValue)
                 entry = Entry(languageID: languageID, document: document)
-                analysis = try await document.open(source)
+                // Stage mutable provider state separately. Providers do not
+                // currently support forking their committed sessions.
+                if let change {
+                    try await document.open(change.before)
+                    analysis = try await document.apply(change)
+                } else {
+                    analysis = try await document.open(source)
+                }
                 rebuilt.insert(uri)
             }
             nextEntries[uri] = entry
@@ -246,6 +273,7 @@ public actor LanguageToolingProject {
 
         let snapshot = ToolingProjectSnapshot(
             revision: proposedRevision, documents: output)
+        try Task.checkCancellation()
         try await resolver?.update(snapshot)
         entries = nextEntries
         currentSnapshot = snapshot
@@ -273,9 +301,24 @@ public actor LanguageToolingProject {
         })
     }
 
+    public func completions(
+        in uri: ToolingDocumentURI, at position: ToolingPosition
+    ) async throws -> [ToolingCompletionItem] {
+        try beginOperation()
+        defer { operationInProgress = false }
+        let (snapshot, entry) = try context(uri)
+        if let resolver, let items = try await resolver.completions(
+            in: snapshot, document: uri, at: position) {
+            return items
+        }
+        return try await entry.document.completions(at: position)
+    }
+
     public func definition(
         in uri: ToolingDocumentURI, at position: ToolingPosition
     ) async throws -> ToolingLocation? {
+        try beginOperation()
+        defer { operationInProgress = false }
         let (snapshot, entry) = try context(uri)
         if let resolver,
            let result = try await resolver.definition(
@@ -286,6 +329,8 @@ public actor LanguageToolingProject {
     public func references(
         in uri: ToolingDocumentURI, at position: ToolingPosition
     ) async throws -> [ToolingLocation] {
+        try beginOperation()
+        defer { operationInProgress = false }
         let (snapshot, entry) = try context(uri)
         if let resolver {
             let result = try await resolver.references(
@@ -300,12 +345,21 @@ public actor LanguageToolingProject {
         at position: ToolingPosition,
         to newName: String
     ) async throws -> ToolingWorkspaceEdit {
+        try beginOperation()
+        defer { operationInProgress = false }
         let (snapshot, _) = try context(uri)
         guard let resolver else {
             throw LanguageToolingError.unsupportedOperation("projectRename")
         }
         return try await resolver.rename(
             in: snapshot, document: uri, at: position, to: newName)
+    }
+
+    private func beginOperation() throws {
+        guard !operationInProgress else {
+            throw LanguageToolingProjectError.operationInProgress
+        }
+        operationInProgress = true
     }
 
     private func context(_ uri: ToolingDocumentURI) throws
