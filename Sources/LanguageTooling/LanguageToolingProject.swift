@@ -180,6 +180,12 @@ public actor LanguageToolingProject {
 
     public var revision: UInt64? { currentSnapshot?.revision }
 
+    var committedSources: [ToolingDocumentURI: SourceSnapshot] {
+        Dictionary(uniqueKeysWithValues: (currentSnapshot?.documents ?? []).map {
+            ($0.uri, $0.snapshot)
+        })
+    }
+
     @discardableResult
     public func update(
         revision proposedRevision: UInt64,
@@ -232,6 +238,7 @@ public actor LanguageToolingProject {
         let committed = Dictionary(uniqueKeysWithValues:
             (currentSnapshot?.documents ?? []).map { ($0.uri, $0) })
         for uri in inputs.keys.sorted() {
+            try Task.checkCancellation()
             let (languageID, source, change) = inputs[uri]!
             let entry: Entry
             let analysis: LanguageProviderAnalysis

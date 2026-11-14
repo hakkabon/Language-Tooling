@@ -4,6 +4,60 @@ import Testing
 
 @Suite("Project-scale language tooling")
 struct LanguageToolingProjectTests {
+    @Test func workspaceDiscardsSupersededRunningDemand() async throws {
+        let resolver = TestProjectResolver()
+        await resolver.pauseNextUpdate()
+        let workspace = LanguageToolingWorkspace(
+            providers: [ProjectTestProvider()], resolver: resolver)
+        let uri = ToolingDocumentURI("file:///client.test")
+        let first = ToolingProjectDocumentUpdate(
+            uri: uri, languageID: "project-test",
+            snapshot: .init(text: "answer", revision: .init(1)))
+        let second = ToolingProjectDocumentUpdate(
+            uri: uri, languageID: "project-test",
+            snapshot: .init(text: "result", revision: .init(2)))
+        try await workspace.submit(revision: 1, documents: [first])
+        let obsolete = Task { try await workspace.diagnostics() }
+        await resolver.waitUntilPaused()
+        try await workspace.submit(revision: 2, documents: [second])
+        await resolver.resumeUpdate()
+        await #expect(throws: WorkspaceSchedulingError.superseded(requested: 1, current: 2)) {
+            try await obsolete.value
+        }
+        let latest = try await workspace.diagnostics()
+        #expect(latest.revision == 2)
+        #expect(latest.value[uri]?.isEmpty == true)
+    }
+
+    @Test func workspaceMaterializesOnlyTheRequestedGeneration() async throws {
+        let resolver = TestProjectResolver()
+        let workspace = LanguageToolingWorkspace(
+            providers: [ProjectTestProvider()], resolver: resolver, maximumDocuments: 1)
+        let uri = ToolingDocumentURI("file:///client.test")
+        let source = SourceSnapshot(text: "answer", revision: .init(1))
+        let change = try SourceEdit(
+            baseRevision: source.revision,
+            range: .init(location: 0, length: 6), replacement: "result")
+            .applying(to: source)
+        try await workspace.submit(revision: 1, documents: [
+            .init(uri: uri, languageID: "project-test", snapshot: source),
+        ])
+        let update = ToolingProjectDocumentUpdate(
+            uri: uri, languageID: "project-test", snapshot: change.after, change: change)
+        try await workspace.submit(revision: 2, documents: [update])
+        await #expect(throws: WorkspaceSchedulingError.documentLimitExceeded) {
+            try await workspace.submit(revision: 3, documents: [update, update])
+        }
+        #expect(await resolver.revisions.isEmpty)
+        let first = try await workspace.diagnostics()
+        #expect(first.revision == 2)
+        #expect(first.analysis?.rebuiltDocuments == [uri])
+        #expect(first.value[uri]?.isEmpty == true)
+        let repeated = try await workspace.diagnostics()
+        #expect(repeated.analysis == nil)
+        #expect(await resolver.revisions == [2])
+    }
+
     @Test func projectCoordinatesDocumentsAndLanguageOwnedResolution() async throws {
         let resolver = TestProjectResolver()
         let project = LanguageToolingProject(
@@ -139,10 +193,33 @@ private actor ProjectTestSession: LanguageToolingSession {
 private actor TestProjectResolver: LanguageToolingProjectResolver {
     private(set) var revisions: [UInt64] = []
     private var reject = false
+    private var pause = false
+    private var paused: CheckedContinuation<Void, Never>?
+    private var observer: CheckedContinuation<Void, Never>?
+
+    func pauseNextUpdate() { pause = true }
+
+    func waitUntilPaused() async {
+        if paused != nil { return }
+        await withCheckedContinuation { observer = $0 }
+    }
+
+    func resumeUpdate() {
+        paused?.resume()
+        paused = nil
+    }
 
     func rejectNextUpdate() { reject = true }
 
     func update(_ snapshot: ToolingProjectSnapshot) async throws {
+        if pause {
+            pause = false
+            await withCheckedContinuation {
+                paused = $0
+                observer?.resume()
+                observer = nil
+            }
+        }
         if reject {
             reject = false
             throw ResolverRejection()
