@@ -8,6 +8,7 @@ public actor LanguageToolingDocument {
     public nonisolated let descriptor: LanguageProviderDescriptor
 
     private let session: any LanguageToolingSession
+    private var updating = false
     public private(set) var snapshot: SourceSnapshot?
     public private(set) var analysis: LanguageProviderAnalysis?
 
@@ -23,11 +24,7 @@ public actor LanguageToolingDocument {
     @discardableResult
     public func open(_ snapshot: SourceSnapshot) async throws
         -> LanguageProviderAnalysis {
-        try validateRevision(of: snapshot)
-        let result = try await session.analyze(snapshot, change: nil)
-        self.snapshot = snapshot
-        analysis = result
-        return result
+        try await update(snapshot)
     }
 
     @discardableResult
@@ -35,13 +32,19 @@ public actor LanguageToolingDocument {
         _ snapshot: SourceSnapshot,
         change: SourceChange? = nil
     ) async throws -> LanguageProviderAnalysis {
+        guard !updating else { throw LanguageToolingError.documentUpdateInProgress }
         try validateRevision(of: snapshot)
         if let change {
             guard self.snapshot == change.before, change.after == snapshot else {
                 throw LanguageProviderError.inconsistentChange
             }
         }
+        updating = true
+        defer { updating = false }
         let result = try await session.analyze(snapshot, change: change)
+        guard result.revision == snapshot.revision, result.languageID == descriptor.id else {
+            throw LanguageToolingError.mismatchedAnalysis
+        }
         self.snapshot = snapshot
         analysis = result
         return result
@@ -97,16 +100,19 @@ public actor LanguageToolingDocument {
     }
 
     public func format() async throws -> String {
+        try requireDocument()
         guard let snapshot else { throw LanguageToolingError.documentNotAnalyzed }
         return try await session.format(snapshot)
     }
 
     public func previewHTML() async throws -> String? {
+        try requireDocument()
         guard let snapshot else { throw LanguageToolingError.documentNotAnalyzed }
         return try await session.previewHTML(snapshot)
     }
 
     private func requireDocument() throws {
+        guard !updating else { throw LanguageToolingError.documentUpdateInProgress }
         guard snapshot != nil else { throw LanguageToolingError.documentNotAnalyzed }
     }
 

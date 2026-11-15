@@ -9,6 +9,7 @@ public enum WorkspaceSchedulingError: Error, Equatable, Sendable {
     case superseded(requested: UInt64, current: UInt64)
     case queueFull
     case documentLimitExceeded
+    case sourceBudgetExceeded
 }
 
 public struct WorkspaceDemandResult<Value: Sendable>: Sendable {
@@ -31,6 +32,8 @@ public actor LanguageToolingWorkspace {
     private let project: LanguageToolingProject
     private let maximumPendingRequests: Int
     private let maximumDocuments: Int
+    private let maximumSourceBytes: Int
+    private let maximumEditOperations: Int
     private var pending: [Waiter] = []
     private var sequence: UInt64 = 0
     private var running = false
@@ -41,12 +44,17 @@ public actor LanguageToolingWorkspace {
         providers: [any LanguageToolingProvider],
         resolver: (any LanguageToolingProjectResolver)? = nil,
         maximumPendingRequests: Int = 64,
-        maximumDocuments: Int = 1_000
+        maximumDocuments: Int = 1_000,
+        maximumSourceBytes: Int = 64 * 1024 * 1024,
+        maximumEditOperations: Int = 100_000
     ) {
         precondition(maximumPendingRequests >= 0 && maximumDocuments >= 0)
+        precondition(maximumSourceBytes >= 0 && maximumEditOperations >= 0)
         project = LanguageToolingProject(providers: providers, resolver: resolver)
         self.maximumPendingRequests = maximumPendingRequests
         self.maximumDocuments = maximumDocuments
+        self.maximumSourceBytes = maximumSourceBytes
+        self.maximumEditOperations = maximumEditOperations
     }
 
     public func submit(revision: UInt64, documents: [ToolingProjectDocumentUpdate]) throws {
@@ -60,9 +68,29 @@ public actor LanguageToolingWorkspace {
         for document in documents where !uris.insert(document.uri).inserted {
             throw LanguageToolingProjectError.duplicateDocument(document.uri)
         }
+        var remainingBytes = maximumSourceBytes
+        var remainingEdits = maximumEditOperations
+        func charge(_ text: String) throws {
+            let bytes = text.utf8.count
+            guard bytes <= remainingBytes else {
+                throw WorkspaceSchedulingError.sourceBudgetExceeded
+            }
+            remainingBytes -= bytes
+        }
         for document in documents {
+            try charge(document.snapshot.text)
             if let change = document.change, change.after != document.snapshot {
                 throw LanguageProviderError.inconsistentChange
+            }
+            if let change = document.change {
+                guard change.replacements.count <= remainingEdits else {
+                    throw WorkspaceSchedulingError.sourceBudgetExceeded
+                }
+                remainingEdits -= change.replacements.count
+                try charge(change.before.text)
+                for replacement in change.replacements {
+                    try charge(replacement.replacement)
+                }
             }
         }
         submitted = (revision, documents)

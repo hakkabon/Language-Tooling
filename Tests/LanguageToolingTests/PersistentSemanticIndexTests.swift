@@ -27,8 +27,15 @@ import Testing
                             dependencies: [library]), at: client)
     try index.replace(.init(input: original[unrelated]!, occurrences: []), at: unrelated)
     try index.checkpoint(to: url)
+    let size = try Data(contentsOf: url).count
+    #expect(throws: SemanticIndexStorageError.checkpointTooLarge) {
+        try index.checkpoint(to: url, maximumBytes: size - 1)
+    }
+    #expect(throws: SemanticIndexStorageError.checkpointTooLarge) {
+        try PersistentSemanticIndex.restore(from: url, matching: original, maximumBytes: size - 1)
+    }
 
-    let warm = try PersistentSemanticIndex.restore(from: url, matching: original)
+    let warm = try PersistentSemanticIndex.restore(from: url, matching: original, maximumBytes: size)
     #expect(warm.documents == index.documents)
     #expect(warm.occurrences(of: declaration.symbol) == [library: [declaration], client: [reference]])
     #expect(warm.affectedDocuments(by: [library]) == [client])

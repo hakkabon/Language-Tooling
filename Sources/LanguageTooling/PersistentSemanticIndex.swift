@@ -71,6 +71,7 @@ public struct SemanticIndexDocument: Hashable, Codable, Sendable {
 }
 
 public enum SemanticIndexStorageError: Error, Equatable, Sendable {
+    case checkpointTooLarge
     case unsupportedSchema(Int)
     case invalidDocument
     case duplicateDocument(String)
@@ -155,22 +156,36 @@ public struct PersistentSemanticIndex: Sendable {
         return seen.subtracting(roots)
     }
 
-    public func checkpoint(to url: URL) throws {
+    public func checkpoint(to url: URL, maximumBytes: Int = 64 * 1024 * 1024) throws {
+        precondition(maximumBytes >= 0)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let records = documents.keys.sorted().map {
             Record(uri: $0.rawValue, document: documents[$0]!)
         }
-        try encoder.encode(Archive(schemaVersion: 1, records: records)).write(to: url, options: .atomic)
+        let data = try encoder.encode(Archive(schemaVersion: 1, records: records))
+        guard data.count <= maximumBytes else { throw SemanticIndexStorageError.checkpointTooLarge }
+        try data.write(to: url, options: .atomic)
     }
 
     /// Reuse records only when current source, artifact and binding inputs match.
     /// Absent or mismatched records are cache misses for the caller to rebuild.
     public static func restore(
-        from url: URL, matching currentInputs: [ToolingDocumentURI: SemanticIndexInput]
+        from url: URL, matching currentInputs: [ToolingDocumentURI: SemanticIndexInput],
+        maximumBytes: Int = 64 * 1024 * 1024
     ) throws -> Self {
         struct Header: Decodable { let schemaVersion: Int }
-        let data = try Data(contentsOf: url)
+        precondition(maximumBytes >= 0 && maximumBytes < Int.max)
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var data = Data()
+        while let chunk = try file.read(upToCount: min(64 * 1024, maximumBytes - data.count + 1)),
+              !chunk.isEmpty {
+            guard chunk.count <= maximumBytes - data.count else {
+                throw SemanticIndexStorageError.checkpointTooLarge
+            }
+            data.append(chunk)
+        }
         let decoder = JSONDecoder()
         let header = try decoder.decode(Header.self, from: data)
         guard header.schemaVersion == 1 else {

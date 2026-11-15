@@ -4,6 +4,24 @@ import Testing
 
 @Suite("Project-scale language tooling")
 struct LanguageToolingProjectTests {
+    @Test func oversizedSubmissionDoesNotSupersedeAcceptedWorkspace() async throws {
+        let workspace = LanguageToolingWorkspace(
+            providers: [ProjectTestProvider()], maximumSourceBytes: 8)
+        let uri = ToolingDocumentURI("file:///client.test")
+        let source = SourceSnapshot(text: "answer", revision: .init(1))
+        try await workspace.submit(revision: 1, documents: [
+            .init(uri: uri, languageID: "project-test", snapshot: source),
+        ])
+        let change = try SourceEdit(baseRevision: source.revision,
+            range: .init(location: 0, length: 6), replacement: "ok").applying(to: source)
+        await #expect(throws: WorkspaceSchedulingError.sourceBudgetExceeded) {
+            try await workspace.submit(revision: 2, documents: [
+                .init(uri: uri, languageID: "project-test", snapshot: change.after, change: change),
+            ])
+        }
+        #expect(try await workspace.diagnostics().revision == 1)
+    }
+
     @Test func workspaceDiscardsSupersededRunningDemand() async throws {
         let resolver = TestProjectResolver()
         await resolver.pauseNextUpdate()

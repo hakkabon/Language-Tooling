@@ -27,6 +27,8 @@ public protocol LanguageToolingSession: LanguageProviderSession {
 }
 
 public enum LanguageToolingError: Error, Hashable, Sendable {
+    case documentUpdateInProgress
+    case mismatchedAnalysis
     case documentNotAnalyzed
     case invalidPosition(ToolingPosition)
     case unsupportedOperation(String)
