@@ -17,7 +17,7 @@ let package = Package(
             targets: ["LanguageExperimentProtocol"]),
     ],
     dependencies: [
-        .package(path: "../Incremental-Parsing"),
+        .package(url: "https://github.com/hakkabon/Incremental-Parsing.git", .upToNextMinor(from: "0.33.0")),
     ],
     targets: [
         .target(
