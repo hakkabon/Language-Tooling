@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Language-Tooling",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v13), .iOS(.v14)],
     products: [
         .library(name: "LanguageTooling", targets: ["LanguageTooling"]),
         .library(
